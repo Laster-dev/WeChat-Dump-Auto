@@ -46,7 +46,7 @@ WeChat Dump Auto 是一个用于扫描 WeChat 进程内存并提取用户相关�
 1. **克隆项目**: 
 
    ```bash
-   git clone https://github.com/your-repo/WeChatDumpAuto.git
+   git clone https://github.com/Laster-dev/WeChat-Dump-Auto.git
    ```
 2. **示例输出**：
    ```
