@@ -1,5 +1,5 @@
 # WeChat Dump Auto
-
+<h1>⭐ 在此仓库留下一个Star</h1>
 WeChat Dump Auto 是一个用于扫描 WeChat 进程内存并提取用户相关信息的工具。该项目提供了 C#、C++ 和 C 三个版本，所有版本的功能都是一致的，并且都仅适用于 Windows 平台。与其他类似项目相比，WeChat Dump Auto 实现了完全自动化的基地址查找，无需在 WeChat 更新时手动调整地址。
 
 ## 功能概述
